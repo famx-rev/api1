@@ -16,19 +16,41 @@ const CREATE_USER_STARTUP_SQL = `
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_user_startup_uid_created (uid, created_at)
-  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
 `;
 
-let tableInitPromise = null;
+let tableReady = false;
+let creatingTablePromise = null;
 
-const ensureStartupTable = async () => {
-  if (!tableInitPromise) {
-    tableInitPromise = query(CREATE_USER_STARTUP_SQL).catch((err) => {
-      tableInitPromise = null;
+const ensureTableExists = async () => {
+  if (tableReady) return;
+
+  if (!creatingTablePromise) {
+    creatingTablePromise = (async () => {
+      await query(CREATE_USER_STARTUP_SQL);
+      tableReady = true;
+    })().catch((err) => {
+      creatingTablePromise = null;
       throw err;
     });
   }
-  await tableInitPromise;
+
+  await creatingTablePromise;
+};
+
+const runQuery = async (sql, params = []) => {
+  await ensureTableExists();
+  try {
+    return await query(sql, params);
+  } catch (err) {
+    // If table was dropped or not yet visible, reset flag and retry once
+    if (err?.code === 'ER_NO_SUCH_TABLE' || err?.errno === 1146) {
+      tableReady = false;
+      await ensureTableExists();
+      return await query(sql, params);
+    }
+    throw err;
+  }
 };
 
 const parseDetails = (raw) => {
@@ -67,8 +89,6 @@ router.use(authenticateToken);
 // Create a new startup
 router.post('/new', async (req, res) => {
   try {
-    await ensureStartupTable();
-
     const { name, tagline, website } = req.body;
     const uid = req.user.id;
 
@@ -86,12 +106,12 @@ router.post('/new', async (req, res) => {
       website: website || '',
     });
 
-    await query(
+    await runQuery(
       'INSERT INTO user_startup (id, uid, name, domain, details_form) VALUES (?, ?, ?, ?, ?)',
       [id, uid, name.trim(), cleanDomain, detailsForm]
     );
 
-    const rows = await query('SELECT * FROM user_startup WHERE id = ?', [id]);
+    const rows = await runQuery('SELECT * FROM user_startup WHERE id = ?', [id]);
     const startup = rows[0];
     const details = parseDetails(startup?.details_form);
 
@@ -110,17 +130,19 @@ router.post('/new', async (req, res) => {
     });
   } catch (error) {
     console.error('Create startup error:', error);
-    res.status(500).json({ message: 'Failed to create startup' });
+    res.status(500).json({
+      message: 'Failed to create startup',
+      error: error.message,
+      code: error.code,
+    });
   }
 });
 
 // List all startups for the authenticated user
 router.get('/list', async (req, res) => {
   try {
-    await ensureStartupTable();
-
     const uid = req.user.id;
-    const rows = await query(
+    const rows = await runQuery(
       'SELECT * FROM user_startup WHERE uid = ? ORDER BY created_at DESC',
       [uid]
     );
@@ -143,19 +165,21 @@ router.get('/list', async (req, res) => {
     res.json({ startups });
   } catch (error) {
     console.error('List startups error:', error);
-    res.status(500).json({ message: 'Failed to fetch startups' });
+    res.status(500).json({
+      message: 'Failed to fetch startups',
+      error: error.message,
+      code: error.code,
+    });
   }
 });
 
 // Get a single startup by id with full details
 router.get('/:id', async (req, res) => {
   try {
-    await ensureStartupTable();
-
     const { id } = req.params;
     const uid = req.user.id;
 
-    const rows = await query(
+    const rows = await runQuery(
       'SELECT * FROM user_startup WHERE id = ? AND uid = ?',
       [id, uid]
     );
@@ -182,20 +206,22 @@ router.get('/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('Get startup error:', error);
-    res.status(500).json({ message: 'Failed to fetch startup' });
+    res.status(500).json({
+      message: 'Failed to fetch startup',
+      error: error.message,
+      code: error.code,
+    });
   }
 });
 
 // Update a startup
 router.put('/:id', async (req, res) => {
   try {
-    await ensureStartupTable();
-
     const { id } = req.params;
     const uid = req.user.id;
     const { name, tagline, website } = req.body;
 
-    const rows = await query(
+    const rows = await runQuery(
       'SELECT * FROM user_startup WHERE id = ? AND uid = ?',
       [id, uid]
     );
@@ -221,12 +247,12 @@ router.put('/:id', async (req, res) => {
       website: newWebsite,
     });
 
-    await query(
+    await runQuery(
       'UPDATE user_startup SET name = ?, domain = ?, details_form = ? WHERE id = ? AND uid = ?',
       [newName, cleanDomain, detailsForm, id, uid]
     );
 
-    const updated = await query('SELECT * FROM user_startup WHERE id = ?', [id]);
+    const updated = await runQuery('SELECT * FROM user_startup WHERE id = ?', [id]);
     const row = updated[0];
     const details = parseDetails(row.details_form);
 
@@ -246,19 +272,21 @@ router.put('/:id', async (req, res) => {
     });
   } catch (error) {
     console.error('Update startup error:', error);
-    res.status(500).json({ message: 'Failed to update startup' });
+    res.status(500).json({
+      message: 'Failed to update startup',
+      error: error.message,
+      code: error.code,
+    });
   }
 });
 
 // Delete a startup
 router.delete('/:id', async (req, res) => {
   try {
-    await ensureStartupTable();
-
     const { id } = req.params;
     const uid = req.user.id;
 
-    const rows = await query(
+    const rows = await runQuery(
       'SELECT * FROM user_startup WHERE id = ? AND uid = ?',
       [id, uid]
     );
@@ -267,12 +295,16 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Startup not found' });
     }
 
-    await query('DELETE FROM user_startup WHERE id = ? AND uid = ?', [id, uid]);
+    await runQuery('DELETE FROM user_startup WHERE id = ? AND uid = ?', [id, uid]);
 
     res.json({ message: 'Startup deleted successfully' });
   } catch (error) {
     console.error('Delete startup error:', error);
-    res.status(500).json({ message: 'Failed to delete startup' });
+    res.status(500).json({
+      message: 'Failed to delete startup',
+      error: error.message,
+      code: error.code,
+    });
   }
 });
 
