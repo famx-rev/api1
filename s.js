@@ -1,11 +1,25 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import { v4 as uuidv4 } from 'uuid';
-import { executeQuery } from './db.js';
+import { query } from './db.js';
 
 const router = express.Router();
 
+const parseDetails = (raw) => {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return {};
+  }
+};
+
 const authenticateToken = (req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
 
@@ -35,16 +49,23 @@ router.post('/new', async (req, res) => {
     }
 
     const id = uuidv4();
-    const cleanDomain = (website || '').trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
-    const detailsForm = JSON.stringify({ tagline: tagline || '', website: website || '' });
+    const cleanDomain = (website || '')
+      .trim()
+      .replace(/^https?:\/\//, '')
+      .replace(/\/$/, '');
+    const detailsForm = JSON.stringify({
+      tagline: tagline || '',
+      website: website || '',
+    });
 
-    await executeQuery(
+    await query(
       'INSERT INTO user_startup (id, uid, name, domain, details_form) VALUES (?, ?, ?, ?, ?)',
       [id, uid, name.trim(), cleanDomain, detailsForm]
     );
 
-    const rows = await executeQuery('SELECT * FROM user_startup WHERE id = ?', [id]);
+    const rows = await query('SELECT * FROM user_startup WHERE id = ?', [id]);
     const startup = rows[0];
+    const details = parseDetails(startup?.details_form);
 
     res.status(201).json({
       message: 'Startup created successfully',
@@ -52,7 +73,7 @@ router.post('/new', async (req, res) => {
         id: startup.id,
         uid: startup.uid,
         name: startup.name,
-        tagline: startup.tagline || (JSON.parse(startup.details_form || '{}').tagline || ''),
+        tagline: details.tagline || startup.tagline || '',
         domain: startup.domain,
         details_form: startup.details_form,
         created_at: startup.created_at,
@@ -69,18 +90,13 @@ router.post('/new', async (req, res) => {
 router.get('/list', async (req, res) => {
   try {
     const uid = req.user.id;
-    const rows = await executeQuery(
+    const rows = await query(
       'SELECT * FROM user_startup WHERE uid = ? ORDER BY created_at DESC',
       [uid]
     );
 
     const startups = rows.map((row) => {
-      let details = {};
-      try {
-        details = JSON.parse(row.details_form || '{}');
-      } catch {
-        details = {};
-      }
+      const details = parseDetails(row.details_form);
       return {
         id: row.id,
         uid: row.uid,
@@ -107,7 +123,7 @@ router.get('/:id', async (req, res) => {
     const { id } = req.params;
     const uid = req.user.id;
 
-    const rows = await executeQuery(
+    const rows = await query(
       'SELECT * FROM user_startup WHERE id = ? AND uid = ?',
       [id, uid]
     );
@@ -117,12 +133,7 @@ router.get('/:id', async (req, res) => {
     }
 
     const row = rows[0];
-    let details = {};
-    try {
-      details = JSON.parse(row.details_form || '{}');
-    } catch {
-      details = {};
-    }
+    const details = parseDetails(row.details_form);
 
     res.json({
       startup: {
@@ -150,7 +161,7 @@ router.put('/:id', async (req, res) => {
     const uid = req.user.id;
     const { name, tagline, website } = req.body;
 
-    const rows = await executeQuery(
+    const rows = await query(
       'SELECT * FROM user_startup WHERE id = ? AND uid = ?',
       [id, uid]
     );
@@ -160,35 +171,30 @@ router.put('/:id', async (req, res) => {
     }
 
     const existing = rows[0];
-    let existingDetails = {};
-    try {
-      existingDetails = JSON.parse(existing.details_form || '{}');
-    } catch {
-      existingDetails = {};
-    }
+    const existingDetails = parseDetails(existing.details_form);
 
     const newName = name !== undefined ? name.trim() : existing.name;
     const cleanDomain =
       website !== undefined
         ? website.trim().replace(/^https?:\/\//, '').replace(/\/$/, '')
         : existing.domain;
-    const newTagline = tagline !== undefined ? tagline : (existingDetails.tagline || '');
-    const newWebsite = website !== undefined ? website : (existingDetails.website || '');
-    const detailsForm = JSON.stringify({ tagline: newTagline, website: newWebsite });
+    const newTagline =
+      tagline !== undefined ? tagline : existingDetails.tagline || '';
+    const newWebsite =
+      website !== undefined ? website : existingDetails.website || '';
+    const detailsForm = JSON.stringify({
+      tagline: newTagline,
+      website: newWebsite,
+    });
 
-    await executeQuery(
+    await query(
       'UPDATE user_startup SET name = ?, domain = ?, details_form = ? WHERE id = ? AND uid = ?',
       [newName, cleanDomain, detailsForm, id, uid]
     );
 
-    const updated = await executeQuery('SELECT * FROM user_startup WHERE id = ?', [id]);
+    const updated = await query('SELECT * FROM user_startup WHERE id = ?', [id]);
     const row = updated[0];
-    let details = {};
-    try {
-      details = JSON.parse(row.details_form || '{}');
-    } catch {
-      details = {};
-    }
+    const details = parseDetails(row.details_form);
 
     res.json({
       message: 'Startup updated successfully',
@@ -216,7 +222,7 @@ router.delete('/:id', async (req, res) => {
     const { id } = req.params;
     const uid = req.user.id;
 
-    const rows = await executeQuery(
+    const rows = await query(
       'SELECT * FROM user_startup WHERE id = ? AND uid = ?',
       [id, uid]
     );
@@ -225,7 +231,7 @@ router.delete('/:id', async (req, res) => {
       return res.status(404).json({ message: 'Startup not found' });
     }
 
-    await executeQuery('DELETE FROM user_startup WHERE id = ? AND uid = ?', [id, uid]);
+    await query('DELETE FROM user_startup WHERE id = ? AND uid = ?', [id, uid]);
 
     res.json({ message: 'Startup deleted successfully' });
   } catch (error) {
