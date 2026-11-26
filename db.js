@@ -9,7 +9,7 @@ const pool = mysql.createPool({
   host: 'gateway01.us-west-2.prod.aws.tidbcloud.com',
   port: 4000,
   user: '3QXFzFQH8TqH9a1.root',
-  password: 'kd43MhC5v1ipepdJ',
+  password: 'qqzVmViypp8BXtDo',
   database: 'sys',
   charset: 'utf8mb4',
   waitForConnections: true,
