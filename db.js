@@ -9,8 +9,12 @@ export const pool = mysql.createPool({
   user: process.env.DB_USERNAME || '3QXFzFQH8TqH9a1.root',
   password: process.env.DB_PASSWORD || 'kd43MhC5v1ipepdJ',
   database: process.env.DB_DATABASE || 'sys',
+  ssl: {
+    minVersion: 'TLSv1.2',
+    rejectUnauthorized: true,
+  },
   waitForConnections: true,
-  connectionLimit: 10,
+  connectionLimit: 3,
   queueLimit: 0,
 });
 
